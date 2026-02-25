@@ -529,8 +529,7 @@ static srtp_err_status_t srtp_stream_clone(
     srtp_session_keys_t *session_keys = NULL;
     const srtp_session_keys_t *template_session_keys = NULL;
 
-    debug_print(mod_srtp, "cloning stream (SSRC: 0x%08x)",
-                (unsigned int)ntohl(ssrc));
+    debug_print(mod_srtp, "cloning stream (SSRC: 0x%08x)", ntohl(ssrc));
 
     /* allocate srtp stream and set str_ptr */
     str = (srtp_stream_ctx_t *)srtp_crypto_alloc(sizeof(srtp_stream_ctx_t));
@@ -1334,8 +1333,7 @@ static srtp_err_status_t srtp_stream_init(srtp_stream_ctx_t *srtp,
         return err;
     }
 
-    debug_print(mod_srtp, "initializing stream (SSRC: 0x%08x)",
-                (unsigned int)p->ssrc.value);
+    debug_print(mod_srtp, "initializing stream (SSRC: 0x%08x)", p->ssrc.value);
 
     /* initialize replay database */
     /*
@@ -1405,8 +1403,7 @@ static srtp_err_status_t srtp_stream_init(srtp_stream_ctx_t *srtp,
 void srtp_event_reporter(srtp_event_data_t *data)
 {
     srtp_err_report(srtp_err_level_warning,
-                    "srtp: in stream 0x%x: ",
-                    (unsigned int)data->ssrc);
+                    "srtp: in stream 0x%x: ", data->ssrc);
 
     switch (data->event) {
     case event_ssrc_collision:
@@ -1641,23 +1638,15 @@ static void srtp_calc_aead_iv(srtp_session_keys_t *session_keys,
     v128_xor(iv, &in, &salt);
 }
 
-srtp_session_keys_t *srtp_get_session_keys(srtp_stream_ctx_t *stream,
-                                           const uint8_t *hdr,
-                                           unsigned int pkt_octet_len,
-                                           unsigned int *mki_size)
+static srtp_session_keys_t *srtp_get_session_keys(srtp_stream_ctx_t *stream,
+                                                  const uint8_t *hdr,
+                                                  unsigned int pkt_octet_len,
+                                                  unsigned int *mki_size,
+                                                  unsigned int tag_len)
 {
     unsigned int base_mki_start_location = pkt_octet_len;
     unsigned int mki_start_location = 0;
-    unsigned int tag_len = 0;
     unsigned int i = 0;
-
-    // Determine the authentication tag size
-    if (stream->session_keys[0].rtp_cipher->algorithm == SRTP_AES_GCM_128 ||
-        stream->session_keys[0].rtp_cipher->algorithm == SRTP_AES_GCM_256) {
-        tag_len = 0;
-    } else {
-        tag_len = srtp_auth_get_tag_length(stream->session_keys[0].rtp_auth);
-    }
 
     if (tag_len > base_mki_start_location) {
         *mki_size = 0;
@@ -1681,6 +1670,44 @@ srtp_session_keys_t *srtp_get_session_keys(srtp_stream_ctx_t *stream,
 
     *mki_size = 0;
     return NULL;
+}
+
+static srtp_session_keys_t *srtp_get_session_keys_rtp(
+    srtp_stream_ctx_t *stream,
+    const uint8_t *hdr,
+    unsigned int pkt_octet_len,
+    unsigned int *mki_size)
+{
+    unsigned int tag_len = 0;
+
+    // Determine the authentication tag size
+    if (stream->session_keys[0].rtp_cipher->algorithm == SRTP_AES_GCM_128 ||
+        stream->session_keys[0].rtp_cipher->algorithm == SRTP_AES_GCM_256) {
+        tag_len = 0;
+    } else {
+        tag_len = srtp_auth_get_tag_length(stream->session_keys[0].rtp_auth);
+    }
+
+    return srtp_get_session_keys(stream, hdr, pkt_octet_len, mki_size, tag_len);
+}
+
+static srtp_session_keys_t *srtp_get_session_keys_rtcp(
+    srtp_stream_ctx_t *stream,
+    const uint8_t *hdr,
+    unsigned int pkt_octet_len,
+    unsigned int *mki_size)
+{
+    unsigned int tag_len = 0;
+
+    // Determine the authentication tag size
+    if (stream->session_keys[0].rtcp_cipher->algorithm == SRTP_AES_GCM_128 ||
+        stream->session_keys[0].rtcp_cipher->algorithm == SRTP_AES_GCM_256) {
+        tag_len = 0;
+    } else {
+        tag_len = srtp_auth_get_tag_length(stream->session_keys[0].rtcp_auth);
+    }
+
+    return srtp_get_session_keys(stream, hdr, pkt_octet_len, mki_size, tag_len);
 }
 
 static srtp_err_status_t srtp_estimate_index(srtp_rdbx_t *rdbx,
@@ -2536,7 +2563,7 @@ srtp_err_status_t srtp_unprotect_mki(srtp_ctx_t *ctx,
         if (ctx->stream_template != NULL) {
             stream = ctx->stream_template;
             debug_print(mod_srtp, "using provisional stream (SSRC: 0x%08x)",
-                        (unsigned int)ntohl(hdr->ssrc));
+                        ntohl(hdr->ssrc));
 
 /*
  * set estimated packet index to sequence number from header,
@@ -2586,8 +2613,8 @@ srtp_err_status_t srtp_unprotect_mki(srtp_ctx_t *ctx,
     /* Determine if MKI is being used and what session keys should be used */
     if (use_mki) {
         session_keys =
-            srtp_get_session_keys(stream, (const uint8_t *)hdr,
-                                  (unsigned int)*pkt_octet_len, &mki_size);
+            srtp_get_session_keys_rtp(stream, (const uint8_t *)hdr,
+                                      (unsigned int)*pkt_octet_len, &mki_size);
 
         if (session_keys == NULL)
             return srtp_err_status_bad_mki;
@@ -3698,7 +3725,7 @@ static srtp_err_status_t srtp_protect_rtcp_aead(
     }
     seq_num = srtp_rdb_get_value(&stream->rtcp_rdb);
     trailer |= htonl(seq_num);
-    debug_print(mod_srtp, "srtcp index: %x", (unsigned int)seq_num);
+    debug_print(mod_srtp, "srtcp index: %x", seq_num);
 
     memcpy(trailer_p, &trailer, sizeof(trailer));
 
@@ -3863,7 +3890,7 @@ static srtp_err_status_t srtp_unprotect_rtcp_aead(
      */
     /* this is easier than dealing with bitfield access */
     seq_num = ntohl(trailer) & SRTCP_INDEX_MASK;
-    debug_print(mod_srtp, "srtcp index: %x", (unsigned int)seq_num);
+    debug_print(mod_srtp, "srtcp index: %x", seq_num);
     status = srtp_rdb_check(&stream->rtcp_rdb, seq_num);
     if (status) {
         return status;
@@ -4142,7 +4169,7 @@ srtp_err_status_t srtp_protect_rtcp_mki(srtp_t ctx,
         return status;
     seq_num = srtp_rdb_get_value(&stream->rtcp_rdb);
     trailer |= htonl(seq_num);
-    debug_print(mod_srtp, "srtcp index: %x", (unsigned int) seq_num);
+    debug_print(mod_srtp, "srtcp index: %x", seq_num);
 
     memcpy(trailer_p, &trailer, sizeof(trailer));
 
@@ -4285,7 +4312,7 @@ srtp_err_status_t srtp_unprotect_rtcp_mki(srtp_t ctx,
 
             debug_print(mod_srtp,
                         "srtcp using provisional stream (SSRC: 0x%08x)",
-                        (unsigned int)ntohl(hdr->ssrc));
+                        ntohl(hdr->ssrc));
         } else {
             /* no template stream, so we return an error */
             return srtp_err_status_no_ctx;
@@ -4296,7 +4323,7 @@ srtp_err_status_t srtp_unprotect_rtcp_mki(srtp_t ctx,
      * Determine if MKI is being used and what session keys should be used
      */
     if (use_mki) {
-        session_keys = srtp_get_session_keys(
+        session_keys = srtp_get_session_keys_rtcp(
             stream, (uint8_t *)hdr, (unsigned int)*pkt_octet_len, &mki_size);
 
         if (session_keys == NULL)
@@ -4375,7 +4402,7 @@ srtp_err_status_t srtp_unprotect_rtcp_mki(srtp_t ctx,
      */
     /* this is easier than dealing with bitfield access */
     seq_num = ntohl(trailer) & SRTCP_INDEX_MASK;
-    debug_print(mod_srtp, "srtcp index: %x", (unsigned int)seq_num);
+    debug_print(mod_srtp, "srtcp index: %x", seq_num);
     status = srtp_rdb_check(&stream->rtcp_rdb, seq_num);
     if (status)
         return status;
